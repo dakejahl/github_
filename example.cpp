@@ -8,7 +8,7 @@
 struct VersionEntry {
 	std::string versionString;
 	std::string versionChanges;
-	std::string versionUpdateUrl;
+	std::vector<std::string> assetUrls;
 };
 
 using ChangeLog = std::vector<VersionEntry>;
@@ -91,7 +91,6 @@ int main(void)
 		return 0;
 	}
 
-	// std::cout << readBuffer << std::endl;
 	if (readBuffer.size() <= 0) {
 		std::cout << "Failed to retrieve data from URL: size: " << readBuffer.size() << std::endl;
 		return 0;
@@ -101,37 +100,45 @@ int main(void)
 	const auto changelogPattern = std::string("<div class=\"markdown-body\">\n*</div>");
 	const auto versionPattern = std::string("/releases/tag/*\">");
 	const auto releaseUrlPattern = std::string("<a href=\"*\"");
+	const auto assetCountPattern = std::string("<span title=\"*\"");
+	const auto assetPattern = std::string("<a href=\"*\"");
 
 	auto releases = split(readBuffer, "release-header");
 
-	std::cout << "Found releases: " << releases.size() << std::endl;
-
 	// Skipping the 0 item because anything before the first "release-header" is not a release
 	for (int releaseIndex = 1, numItems = releases.size(); releaseIndex < numItems; ++releaseIndex) {
-		const std::string& releaseText = releases[releaseIndex];
 
+		const std::string& releaseText = releases[releaseIndex];
 		int offset = 0;
 		std::string updateVersion = match(versionPattern, releaseText, offset, offset);
-		std::cout << "Update version: " << updateVersion << std::endl;
-		if (updateVersion.at(0) == '.' && updateVersion.at(1) == 'v') {
-			updateVersion.erase(0, 2);
-		} else if (updateVersion.at(0) == 'v') {
-			updateVersion.erase(0, 1);
+		const std::string versionChanges = match(changelogPattern, releaseText, offset, offset);
+
+		int assetTextPos = releaseText.find("Assets");
+		std::string AssetText = releaseText.substr(assetTextPos, releaseText.size() - assetTextPos);
+
+		int assetOffset = 0;
+		int numAssets = std::stoi(match(assetCountPattern, AssetText, assetOffset, assetOffset)
+								,nullptr
+								,0);
+
+		std::vector<std::string> assets;
+		for (int i = 0; i < numAssets; i++) {
+			std::string asset = match(assetPattern, AssetText, assetOffset, assetOffset);
+			assets.push_back("https://github.com" + asset);
 		}
 
-		const std::string updateChanges = match(changelogPattern, releaseText, offset, offset);
+		changelog.push_back({ updateVersion, versionChanges, assets });
+	}
 
-		std::string url;
-		offset = 0; // Gotta start scanning from the beginning again, since the release URL could be before the release description
-		while (offset != -1)
-		{
-			const std::string newUrl = match(releaseUrlPattern, releaseText, offset, offset);
-			url = newUrl;
-		}
+	// Print out all our Versions and their Assets
+	for (auto& item : changelog) {
+		std::cout << "Version: "<< item.versionString << std::endl;
+		std::cout << "Assets: " << item.assetUrls.size() << std::endl;
 
-		if (url.size() != 0) {
-			changelog.push_back({ updateVersion, updateChanges, "https://github.com" + url });
+		for (auto& a : item.assetUrls) {
+			std::cout << "--> "<< a << std::endl;
 		}
+		std::cout << " " << std::endl;
 	}
 
 	return 0;
