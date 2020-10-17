@@ -1,17 +1,4 @@
-#include <iostream>
-#include <string>
-#include <curl/curl.h>
-
-#include <functional>
-#include <vector>
-
-struct VersionEntry {
-	std::string versionString;
-	std::string versionChanges;
-	std::vector<std::string> assetUrls;
-};
-
-using ChangeLog = std::vector<VersionEntry>;
+#include "GitUpdater.h"
 
 static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
 {
@@ -19,7 +6,7 @@ static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *use
 	return size * nmemb;
 }
 
-std::vector<std::string> split(const std::string& str, const std::string& delim)
+static std::vector<std::string> split(const std::string& str, const std::string& delim)
 {
 	std::vector<std::string> tokens;
 	size_t prev = 0, pos = 0;
@@ -64,26 +51,37 @@ static std::string match(const std::string& pattern, const std::string& text, in
 	return text.substr(leftDelimiterStart + delimiters[0].length(), resultLength);
 }
 
-int main(void)
+GitUpdater::GitUpdater(std::string url)
+	: _url(url)
 {
-	CURL *curl;
+	// Anything to do?
+}
+
+GitUpdater::~GitUpdater()
+{
+	// Anything to do?
+}
+
+bool GitUpdater::check_for_updates()
+{
+	// CURL *curl;
 	CURLcode res;
-	std::string readBuffer;
+	// std::string readBuffer;
 
-	curl = curl_easy_init();
+	_curl = curl_easy_init();
 
-	if (!curl) {
+	if (!_curl) {
 		std::cout << "Failed to init curl" << std::endl;
 		return 0;
 	}
 
-	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 5L);
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, true);
-	curl_easy_setopt(curl, CURLOPT_URL, "https://github.com/PX4/Firmware/releases");
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
-	res = curl_easy_perform(curl);
-	curl_easy_cleanup(curl);
+	curl_easy_setopt(_curl, CURLOPT_CONNECTTIMEOUT, 5L);
+	curl_easy_setopt(_curl, CURLOPT_FOLLOWLOCATION, true);
+	curl_easy_setopt(_curl, CURLOPT_URL, _url.c_str());
+	curl_easy_setopt(_curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(_curl, CURLOPT_WRITEDATA, &_readBuffer);
+	res = curl_easy_perform(_curl);
+	curl_easy_cleanup(_curl);
 
 	if (res != CURLcode::CURLE_OK) {
 		std::cout << "Error while downloading text, curl error code: "
@@ -91,19 +89,23 @@ int main(void)
 		return 0;
 	}
 
-	if (readBuffer.size() <= 0) {
-		std::cout << "Failed to retrieve data from URL: size: " << readBuffer.size() << std::endl;
+	if (_readBuffer.size() <= 0) {
+		std::cout << "Failed to retrieve data from URL: size: " << _readBuffer.size() << std::endl;
 		return 0;
 	}
 
-	ChangeLog changelog;
+	return 1;
+}
+
+VersionList& GitUpdater::fetch_versions_list()
+{
 	const auto changelogPattern = std::string("<div class=\"markdown-body\">\n*</div>");
 	const auto versionPattern = std::string("/releases/tag/*\">");
 	const auto releaseUrlPattern = std::string("<a href=\"*\"");
 	const auto assetCountPattern = std::string("<span title=\"*\"");
 	const auto assetPattern = std::string("<a href=\"*\"");
 
-	auto releases = split(readBuffer, "release-header");
+	auto releases = split(_readBuffer, "release-header");
 
 	// Skipping the 0 item because anything before the first "release-header" is not a release
 	for (int releaseIndex = 1, numItems = releases.size(); releaseIndex < numItems; ++releaseIndex) {
@@ -127,19 +129,29 @@ int main(void)
 			assets.push_back("https://github.com" + asset);
 		}
 
-		changelog.push_back({ updateVersion, versionChanges, assets });
+		_versions.push_back({updateVersion, versionChanges, assets});
 	}
 
 	// Print out all our Versions and their Assets
-	for (auto& item : changelog) {
-		std::cout << "Version: "<< item.versionString << std::endl;
-		std::cout << "Assets: " << item.assetUrls.size() << std::endl;
+#ifdef DEBUG
+	for (auto& ver : _versions) {
+		std::cout << "Version: "<< ver.versionString << std::endl;
+		std::cout << "Assets: " << ver.assetUrls.size() << std::endl;
 
-		for (auto& a : item.assetUrls) {
+		for (auto& a : ver.assetUrls) {
 			std::cout << "--> "<< a << std::endl;
 		}
 		std::cout << " " << std::endl;
 	}
+#endif
 
-	return 0;
+	return _versions;
+}
+
+int main(int argc, const char** argv)
+{
+	GitUpdater updater("https://github.com/PX4/Firmware/releases");
+	if (updater.check_for_updates()) {
+		VersionList versions = updater.fetch_versions_list();
+	}
 }
