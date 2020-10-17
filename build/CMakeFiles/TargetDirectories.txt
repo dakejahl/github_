@@ -1,3 +1,0 @@
-/home/jake/code/watts_innovations/curl_example/build/CMakeFiles/rebuild_cache.dir
-/home/jake/code/watts_innovations/curl_example/build/CMakeFiles/git_updater.dir
-/home/jake/code/watts_innovations/curl_example/build/CMakeFiles/edit_cache.dir
