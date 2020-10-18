@@ -8,15 +8,20 @@
 #include <curl/curl.h>
 #include <json/json.h>
 
-struct VersionEntry {
-	std::string versionString;
-	std::string versionChanges;
-	std::string versionUpdateUrl;
-};
+#include <boost/filesystem.hpp>
 
-using ChangeLog = std::vector<VersionEntry>;
+// struct VersionEntry {
+// 	std::string versionString;
+// 	std::string versionChanges;
+// 	std::string versionUpdateUrl;
+// };
 
-static size_t WriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
+using Release_t = std::map<int, std::string>;
+
+Release_t _releaseIndexNameMap {};
+
+
+static size_t CurlWriteCallback(void *contents, size_t size, size_t nmemb, void *userp)
 {
     ((std::string*)userp)->append((char*)contents, size * nmemb);
     return size * nmemb;
@@ -67,6 +72,18 @@ static std::string match(const std::string& pattern, const std::string& text, in
 	return text.substr(leftDelimiterStart + delimiters[0].length(), resultLength);
 }
 
+Release_t get_releases(const Json::Value& jsonData)
+{
+	// For the list of releases, get index, tag name, and asset_url
+	for (int index = 0; index < jsonData.size(); ++index) {
+		Json::Value release = jsonData[index];
+		std::string tag = release["tag_name"].asString();
+		_releaseIndexNameMap.insert(make_pair(index, tag));
+	}
+
+	return _releaseIndexNameMap;
+}
+
 int main(void)
 {
 	CURL *curl;
@@ -80,15 +97,12 @@ int main(void)
 		return 0;
 	}
 
-	// curl_easy_setopt(curl, CURLOPT_URL, "https://github.com/wattsinnovations/PRISM/releases");
-	// curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
-	// curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
 	std::string url = "https://api.github.com/repos/PX4/Firmware/releases";
-	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "GET");
+	curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
 	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, "application/vnd.github.v3+json");
 	curl_easy_setopt(curl, CURLOPT_USERAGENT, "PRISM_OS");
 	curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, CurlWriteCallback);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, &readBuffer);
 
 	res = curl_easy_perform(curl);
@@ -100,13 +114,10 @@ int main(void)
 		return 0;
 	}
 
-	// std::cout << readBuffer << std::endl;
 	if (readBuffer.size() <= 0) {
 		std::cout << "Failed to retrieve data from URL" << std::endl;
 		return 0;
 	}
-
-	// std::cout << readBuffer << std::endl;
 
 	/// JsonCpp test
     Json::CharReaderBuilder builder {};
@@ -119,61 +130,32 @@ int main(void)
                                           &root,
                                           &errors);
 
-    std::map<int, std::string> releaseIndexNameMap {};
 
-	if (is_parsed) {
-		std::cout << "Successfully parsed JSON data" << std::endl;
-		std::cout << "\nJSON data received:" << std::endl;
-		std::cout << "\nFound " << root.size() << " releases" << std::endl;
-
-		for (int index = 0; index < root.size(); ++index) {  // Iterates over the sequence elements.
-			Json::Value release = root[index];
-			std::string name =  release["name"].asString();
-			releaseIndexNameMap.insert(make_pair(index, name));
-		}
-
-		// for (auto it = releaseIndexNameMap.begin(); it != releaseIndexNameMap.end(); ++it)
-		for (auto it : releaseIndexNameMap)
-			std::cout << it.first << "  :  " << it.second << std::endl;
+	if (!is_parsed) {
+		std::cout << "Failed to parse JSON data" << std::endl;
+		return 0;
 	}
 
-	return 0;
-	//////////////// end HACK
+	std::cout << "Successfully parsed JSON data" << std::endl;
+	std::cout << "\nJSON data received:" << std::endl;
+	std::cout << "\nFound " << root.size() << " releases" << std::endl;
 
-	ChangeLog changelog;
-	const auto changelogPattern = std::string("<div class=\"markdown-body\">\n*</div>");
-	const auto versionPattern = std::string("/releases/tag/*\">");
-	const auto releaseUrlPattern = std::string("<a href=\"*\"");
+	// Extracts releases from JSON data
+	auto releases = get_releases(root);
 
-	auto releases = split(readBuffer, "release-header");
+	const char* releaseDir = "releases/";
+	for (auto it : releases) {
+		// std::cout << it.first << "  :  " << it.second << std::endl;
 
-	std::cout << "Found releases: " << releases.size() << std::endl;
+		int index = it.first;
+		std::string tag = it.second;
 
-	// Skipping the 0 item because anything before the first "release-header" is not a release
-	for (int releaseIndex = 1, numItems = releases.size(); releaseIndex < numItems; ++releaseIndex) {
-		const std::string& releaseText = releases[releaseIndex];
+		if(boost::filesystem::create_directory(releaseDir + tag)) {
+			// Found a new release, add all the assets to it
+			std::cout << "Found new release! --> " << tag << std::endl;
 
-		int offset = 0;
-		std::string updateVersion = match(versionPattern, releaseText, offset, offset);
-		std::cout << "Update version: " << updateVersion << std::endl;
-		if (updateVersion.at(0) == '.' && updateVersion.at(1) == 'v') {
-			updateVersion.erase(0, 2);
-		} else if (updateVersion.at(0) == 'v') {
-			updateVersion.erase(0, 1);
-		}
-
-		const std::string updateChanges = match(changelogPattern, releaseText, offset, offset);
-
-		std::string url;
-		offset = 0; // Gotta start scanning from the beginning again, since the release URL could be before the release description
-		while (offset != -1)
-		{
-			const std::string newUrl = match(releaseUrlPattern, releaseText, offset, offset);
-			url = newUrl;
-		}
-
-		if (url.size() != 0) {
-			changelog.push_back({ updateVersion, updateChanges, "https://github.com" + url });
+		} else {
+			std::cout << "Already tracking release " << tag << std::endl;
 		}
 	}
 
